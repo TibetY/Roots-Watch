@@ -83,20 +83,36 @@ function parseArgs(argv) {
   return args;
 }
 
-function buildConfig(argv, env) {
+/**
+ * First value that isn't `undefined`, `null`, or `''`.
+ *
+ * Plain `??` isn't enough here: an unset GitHub Actions repository *variable*
+ * still gets injected into `env:` as an empty string rather than being
+ * omitted, so `env.X ?? DEFAULT` would pick the empty string and never reach
+ * the default.
+ */
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined && value !== null && value !== '');
+}
+
+export function buildConfig(argv, env) {
   const args = parseArgs(argv);
-  const sizesRaw = args.values.sizes ?? env.ROOTS_WATCH_SIZES ?? DEFAULT_SIZES;
+  const sizesRaw = firstDefined(args.values.sizes, env.ROOTS_WATCH_SIZES, DEFAULT_SIZES);
 
   return {
-    url: args.values.url ?? env.ROOTS_WATCH_URL ?? DEFAULT_URL,
+    url: firstDefined(args.values.url, env.ROOTS_WATCH_URL, DEFAULT_URL),
     sizes: sizesRaw
       .split(',')
       .map((size) => size.trim())
       .filter(Boolean),
     watch: args.flags.has('watch'),
-    intervalMinutes: Number(args.values.interval ?? env.ROOTS_WATCH_INTERVAL ?? DEFAULT_INTERVAL_MINUTES),
-    renotifyHours: Number(args.values['renotify-hours'] ?? env.ROOTS_WATCH_RENOTIFY_HOURS ?? DEFAULT_RENOTIFY_HOURS),
-    statePath: resolve(args.values.state ?? env.ROOTS_WATCH_STATE ?? resolve(scriptDir, '..', '.watch-state.json')),
+    intervalMinutes: Number(firstDefined(args.values.interval, env.ROOTS_WATCH_INTERVAL, DEFAULT_INTERVAL_MINUTES)),
+    renotifyHours: Number(
+      firstDefined(args.values['renotify-hours'], env.ROOTS_WATCH_RENOTIFY_HOURS, DEFAULT_RENOTIFY_HOURS),
+    ),
+    statePath: resolve(
+      firstDefined(args.values.state, env.ROOTS_WATCH_STATE, resolve(scriptDir, '..', '.watch-state.json')),
+    ),
     useBrowser: args.flags.has('browser') || env.ROOTS_WATCH_BROWSER === '1',
     dumpPath: args.values.dump ?? null,
     json: args.flags.has('json'),
