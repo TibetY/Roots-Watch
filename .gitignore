@@ -1,0 +1,14 @@
+node_modules/
+
+# Local Claude Code permission cache — machine-specific, can contain the ntfy
+# topic name from allowed command history.
+.claude/settings.local.json
+
+# Credentials — never commit these.
+.env
+
+# Run state: what each size looked like on the previous check.
+.watch-state.json
+
+# Saved pages from --dump
+*.dump.html

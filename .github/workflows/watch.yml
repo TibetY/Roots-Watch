@@ -1,0 +1,73 @@
+name: Stock watch
+
+# Polls the watched Roots product every 10 minutes and sends a push
+# notification when a wanted size comes back in stock. Runs here rather than
+# on a laptop so it keeps checking overnight and while the machine is closed.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions):
+#   ROOTS_WATCH_WEBHOOK        - JSON POST target (e.g. https://ntfy.sh for ntfy)
+#   ROOTS_WATCH_WEBHOOK_TOPIC  - ntfy.sh topic, if the webhook is ntfy's bare origin
+# Optional repository variables (same settings page, Variables tab):
+#   ROOTS_WATCH_URL      - override the product page (defaults to the shirt)
+#   ROOTS_WATCH_SIZES    - override the sizes (defaults to 3,5)
+#
+# Two things to know about GitHub's scheduler: cron fires late under load (a
+# few minutes is normal, more at the top of the hour, which is why this runs
+# on the :04s rather than the :00s), and it stops scheduling entirely after 60
+# days without a push to the repository. If the alerts go quiet for weeks,
+# check that first.
+
+on:
+  schedule:
+    - cron: '4,14,24,34,44,54 * * * *'
+  workflow_dispatch:
+
+# Never let a slow run overlap the next scheduled one.
+concurrency:
+  group: stock-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # No `npm ci` step: the watcher has no runtime dependencies. vitest is
+      # the only package in this repo and it is needed for tests, not for this.
+
+      # Each run gets a fresh machine, so the "have we already alerted about
+      # this restock" state has to be carried between runs. The key is unique
+      # per run (caches are immutable) and restore-keys picks up the newest
+      # previous one.
+      - name: Restore watch state
+        uses: actions/cache@v4
+        with:
+          path: .watch-state.json
+          key: watch-state-${{ github.run_id }}
+          restore-keys: watch-state-
+
+      - name: Check stock
+        env:
+          ROOTS_WATCH_WEBHOOK: ${{ secrets.ROOTS_WATCH_WEBHOOK }}
+          ROOTS_WATCH_WEBHOOK_TOPIC: ${{ secrets.ROOTS_WATCH_WEBHOOK_TOPIC }}
+          ROOTS_WATCH_URL: ${{ vars.ROOTS_WATCH_URL }}
+          ROOTS_WATCH_SIZES: ${{ vars.ROOTS_WATCH_SIZES }}
+        run: |
+          set +e
+          node src/index.mjs --once
+          code=$?
+          set -e
+          # 10 (in stock) is a successful check, not a failed job — the alert
+          # has already gone out by this point. 20 means the page couldn't be
+          # read; the script alerts on its own after a few of those in a row,
+          # so here it's only a warning.
+          case "$code" in
+            0|10) exit 0 ;;
+            20) echo "::warning::Could not determine availability on this run" ; exit 0 ;;
+            *) exit "$code" ;;
+          esac

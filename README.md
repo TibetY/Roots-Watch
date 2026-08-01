@@ -1,0 +1,146 @@
+# roots-stock-watch
+
+Watches a [roots.com](https://www.roots.com) product page for specific sizes and
+sends a push notification with a buy link the moment one comes back in stock.
+
+Default target: **Roots x Big Apple T-Shirt**, colour `12B`, **sizes 3 and 5**.
+
+```
+https://www.roots.com/ca/en/roots-x-big-apple-t-shirt-27190104.html?dwvar_27190104_color=12B
+```
+
+The watcher itself has **no dependencies** — clone it and run it with Node 18+.
+The one package in `package.json` is vitest, for the tests.
+
+## Quick start
+
+```bash
+# One check, nothing sent — just prints what it sees.
+node src/index.mjs --once --dry-run
+
+# Keep checking every 30 minutes in this terminal.
+npm run watch
+```
+
+## Setting up notifications
+
+Alerts go out through a generic JSON webhook. Configure it in the environment
+before running the watcher.
+
+```bash
+cp .env.example .env   # then fill it in — .env is gitignored
+```
+
+`ROOTS_WATCH_WEBHOOK` can be any URL that accepts a JSON POST — Pushover, ntfy,
+Slack, Discord, or an IFTTT/Zapier hook wired to SMS. The payload includes
+`message`, `text` and `content`, so most services work without a translation
+step.
+
+The recommended default is **ntfy.sh**: free, no account, and push notifications
+land in seconds. Install the [ntfy app](https://ntfy.sh) and:
+
+```bash
+ROOTS_WATCH_WEBHOOK=https://ntfy.sh
+ROOTS_WATCH_WEBHOOK_TOPIC=<your-topic>
+```
+
+ntfy only reads JSON fields when the topic is in the request body — posting
+straight to `https://ntfy.sh/<topic>` makes it treat the whole JSON blob as the
+literal message text, which is why `ROOTS_WATCH_WEBHOOK` stays the bare origin
+and the topic is a separate variable. Subscribe to that same topic in the app to
+get the push. ntfy topics are public and unauthenticated by default, so pick
+something long and random rather than a plain word — anyone who knows the topic
+name can read or publish to it, which matters for a limited restock you don't
+want to share.
+
+With nothing set the watcher still runs and prints results; it just has nowhere
+to send them, and says so on startup.
+
+## Running it every 10 minutes
+
+`.github/workflows/watch.yml` runs the check on GitHub Actions every 10 minutes
+(on the :04s, to dodge the top-of-hour scheduling crunch), so nothing needs to
+stay open on your machine. Put the webhook
+values in **repository secrets** (Settings → Secrets and variables → Actions) —
+never commit a topic name or webhook URL, since both act as credentials.
+
+Scheduled workflows only fire from the repository's **default branch**, so the
+workflow has to be on `main` to run at all.
+
+To run it locally instead, `npm run watch` keeps a terminal loop going, or use
+cron:
+
+```cron
+7,37 * * * * cd /path/to/roots-stock-watch && /usr/bin/node src/index.mjs --once >> /tmp/roots-watch.log 2>&1
+```
+
+## How it decides something is in stock
+
+roots.com runs on Salesforce Commerce Cloud, which exposes the same JSON
+endpoint the product page itself calls when you click a size swatch
+(`Product-Variation`). Each size comes back with a `selectable` flag — the
+site's own answer to "can this go in the cart right now" — and that is what the
+watcher trusts. The endpoint URL is read out of the page rather than hard-coded,
+so a storefront or locale change doesn't break it.
+
+If that call fails it falls back to reading the size swatches out of the HTML
+and flags the result as low confidence; alerts from that path carry a
+"double-check before buying" note.
+
+Every layer is allowed to answer **unknown**. A size that can't be read is never
+reported as sold out, because a quiet watcher and a sold-out shirt look
+identical from the outside — after four unreadable checks in a row (about two
+hours) it sends *itself* an alert, so a site redesign or a bot wall doesn't cost
+you the restock.
+
+Alerts are deduped through `.watch-state.json`: you get one notification when a
+size flips to in-stock, not one every half hour while it stays there.
+
+## Options
+
+| Flag | Meaning |
+| --- | --- |
+| `--url <url>` | Product page, including the `dwvar_..._color` parameter. |
+| `--sizes 3,5` | Sizes to watch. `3` also matches `3T` / `3 (3T)`. |
+| `--watch` | Keep running instead of checking once. |
+| `--interval 30` | Minutes between checks in `--watch` mode. |
+| `--renotify-hours 6` | While a size stays in stock, re-alert at most this often. |
+| `--browser` | Render with Playwright (`npm i -D playwright`) if plain fetches get blocked. |
+| `--dump page.html` | Save the fetched HTML — useful when parsing looks wrong. |
+| `--json` | Machine-readable output. |
+| `--dry-run` | Do everything except send. |
+
+Exit codes: `0` nothing in stock, `10` something is, `20` couldn't tell.
+
+## Watching something else
+
+Any Roots product page works — copy the URL with the colour swatch selected:
+
+```bash
+node src/index.mjs --once --url 'https://www.roots.com/ca/en/<product>.html?dwvar_<id>_color=<code>' --sizes M,L
+```
+
+Set `ROOTS_WATCH_URL` / `ROOTS_WATCH_SIZES` (as repository *variables* on
+Actions) to change the default target without editing the workflow.
+
+## If it stops working
+
+Run `node src/index.mjs --once --dump page.html --json` and look at `source`:
+
+- `variation-api` — the good path.
+- `html` — the endpoint call failed; parsing is working off markup.
+- `none` — the page couldn't be fetched at all. Check `page.html` for a
+  bot-check or CAPTCHA page; `--browser` usually gets past those.
+
+`npm test` covers the parsers against fixtures shaped like Salesforce Commerce
+Cloud output, so it will tell you whether a change broke the logic — but only
+the real page can tell you whether the site changed shape underneath it.
+
+## Layout
+
+```
+src/index.mjs   CLI, scheduling, alert dedupe, state
+src/parse.mjs   All page parsing — pure functions, no I/O
+src/notify.mjs  Webhook delivery (ntfy, Slack, Discord, Pushover, ...)
+test/           Fixture-based tests for the parsers
+```
