@@ -56,22 +56,40 @@ want to share.
 With nothing set the watcher still runs and prints results; it just has nowhere
 to send them, and says so on startup.
 
-## Running it every 10 minutes
+## Running it every 5 minutes
 
-`.github/workflows/watch.yml` runs the check on GitHub Actions every 10 minutes
-(on the :04s, to dodge the top-of-hour scheduling crunch), so nothing needs to
-stay open on your machine. Put the webhook
-values in **repository secrets** (Settings → Secrets and variables → Actions) —
-never commit a topic name or webhook URL, since both act as credentials.
+`.github/workflows/watch.yml` runs the check on GitHub Actions every 5 minutes,
+so nothing needs to stay open on your machine. Put the webhook values in
+**repository secrets** (Settings → Secrets and variables → Actions) — never
+commit a topic name or webhook URL, since both act as credentials.
 
 Scheduled workflows only fire from the repository's **default branch**, so the
 workflow has to be on `main` to run at all.
 
+### Why the cron doesn't set the cadence
+
+`schedule` is best-effort, and GitHub sheds a lot of it under load. This repo
+ran a 10-minute cron and got **30 of the 321 runs it asked for** over two days —
+a median of 1.6 hours between checks, worst case 3.6 hours, firing at scattered
+minutes that ignored the cron entirely. Raising the frequency to `*/5` makes
+that worse rather than better: high-frequency schedules are the first thing to
+get dropped.
+
+So cron doesn't set the pace here. It only *starts* a session, twice an hour,
+and the watcher paces its own 5-minute checks from inside one long-running job.
+A dropped tick now costs one session start instead of one check. Sessions run
+55 minutes, and `concurrency` keeps at most one running with one queued behind
+it, so the next session starts as soon as the current one ends and coverage
+stays roughly continuous.
+
+The public-repo Actions allowance is what makes this affordable — a job running
+almost continuously would be expensive against a private repo's minute budget.
+
 To run it locally instead, `npm run watch` keeps a terminal loop going, or use
-cron:
+cron — the local cron daemon is reliable, so there one line per check is fine:
 
 ```cron
-7,37 * * * * cd /path/to/roots-stock-watch && /usr/bin/node src/index.mjs --once >> /tmp/roots-watch.log 2>&1
+*/5 * * * * cd /path/to/roots-stock-watch && /usr/bin/node src/index.mjs --once >> /tmp/roots-watch.log 2>&1
 ```
 
 ## How it decides something is in stock
@@ -89,9 +107,10 @@ and flags the result as low confidence; alerts from that path carry a
 
 Every layer is allowed to answer **unknown**. A size that can't be read is never
 reported as sold out, because a quiet watcher and a sold-out shirt look
-identical from the outside — after four unreadable checks in a row (about two
-hours) it sends *itself* an alert, so a site redesign or a bot wall doesn't cost
-you the restock.
+identical from the outside — after two hours of unreadable checks it sends
+*itself* an alert, so a site redesign or a bot wall doesn't cost you the
+restock. That threshold is wall-clock time, not a number of checks, so changing
+the interval doesn't quietly change what it means.
 
 Alerts are deduped through `.watch-state.json`: you get one notification when a
 size flips to in-stock, not one every half hour while it stays there.
@@ -104,6 +123,7 @@ size flips to in-stock, not one every half hour while it stays there.
 | `--sizes 3,5` | Sizes to watch. `3` also matches `3T` / `3 (3T)`. |
 | `--watch` | Keep running instead of checking once. |
 | `--interval 30` | Minutes between checks in `--watch` mode. |
+| `--max-minutes 55` | Stop `--watch` after roughly this long. Default: run forever. |
 | `--renotify-hours 6` | While a size stays in stock, re-alert at most this often. |
 | `--browser` | Render with Playwright (`npm i -D playwright`) if plain fetches get blocked. |
 | `--dump page.html` | Save the fetched HTML — useful when parsing looks wrong. |
@@ -122,6 +142,7 @@ node src/index.mjs --once --url 'https://www.roots.com/ca/en/<product>.html?dwva
 
 Set `ROOTS_WATCH_URL` / `ROOTS_WATCH_SIZES` (as repository *variables* on
 Actions) to change the default target without editing the workflow.
+`ROOTS_WATCH_INTERVAL` changes the check interval the same way.
 
 ## If it stops working
 
