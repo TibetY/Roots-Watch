@@ -53,9 +53,13 @@ const DEFAULT_INTERVAL_MINUTES = 30;
 export const DEFAULT_RENOTIFY_HOURS = 6;
 // Two hours of consecutive blindness before we bother the user about it. Short
 // enough to catch a real breakage the same morning, long enough to ride out a
-// transient 403 or a maintenance window. Checks run every 10 minutes (locally
-// and on the GitHub Actions cron), so that's 12 consecutive misses.
-const BLIND_RUNS_BEFORE_ALERT = 12;
+// transient 403 or a maintenance window.
+//
+// Measured in wall-clock time rather than in consecutive runs: this used to be
+// "12 misses", which silently meant something different every time the check
+// interval changed, and meant nothing at all on Actions, where the gap between
+// runs is decided by GitHub's scheduler rather than by us.
+const BLIND_HOURS_BEFORE_ALERT = 2;
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 
@@ -109,6 +113,9 @@ export function buildConfig(argv, env) {
       .filter(Boolean),
     watch: args.flags.has('watch'),
     intervalMinutes: Number(firstDefined(args.values.interval, env.ROOTS_WATCH_INTERVAL, DEFAULT_INTERVAL_MINUTES)),
+    // 0 = run forever. Used on Actions to end the session cleanly before the
+    // job would be killed, so the post-job cache save still runs.
+    maxMinutes: Number(firstDefined(args.values['max-minutes'], env.ROOTS_WATCH_MAX_MINUTES, 0)),
     renotifyHours: Number(
       firstDefined(args.values['renotify-hours'], env.ROOTS_WATCH_RENOTIFY_HOURS, DEFAULT_RENOTIFY_HOURS),
     ),
@@ -134,6 +141,7 @@ Options:
   --sizes <a,b>            Comma-separated sizes to watch. Default: ${DEFAULT_SIZES}
   --watch                  Keep running and re-check on an interval.
   --interval <minutes>     Minutes between checks in --watch mode. Default: ${DEFAULT_INTERVAL_MINUTES}
+  --max-minutes <n>        Stop --watch after roughly this long. Default: run forever.
   --renotify-hours <n>     Re-send while still in stock, at most this often. Default: ${DEFAULT_RENOTIFY_HOURS}
   --state <path>           Where to persist alert state.
   --browser                Render with Playwright instead of a plain fetch.
@@ -253,7 +261,7 @@ async function loadState(path) {
   try {
     return JSON.parse(await readFile(path, 'utf8'));
   } catch {
-    return { sizes: {}, blindRuns: 0, blindAlertSent: false };
+    return { sizes: {}, blindRuns: 0, blindSince: null, blindAlertSent: false };
   }
 }
 
@@ -418,14 +426,24 @@ export async function evaluateCheck(config, notifyConfig, startedAt = new Date()
 
   // Track "we couldn't tell" separately from "sold out" so a broken parser
   // surfaces as its own alert instead of looking like a quiet no-restock.
-  state.blindRuns = allUnknown ? (state.blindRuns ?? 0) + 1 : 0;
-  if (!allUnknown) state.blindAlertSent = false;
+  if (allUnknown) {
+    state.blindRuns = (state.blindRuns ?? 0) + 1;
+    // Stamped on the first blind check of a streak, so a fresh state file (a
+    // cache miss on Actions) can't look like it has been blind for hours.
+    state.blindSince = state.blindSince ?? startedAt.toISOString();
+  } else {
+    state.blindRuns = 0;
+    state.blindSince = null;
+    state.blindAlertSent = false;
+  }
 
-  if (state.blindRuns >= BLIND_RUNS_BEFORE_ALERT && !state.blindAlertSent && !config.dryRun) {
+  const blindHours = state.blindSince ? (nowMs - Date.parse(state.blindSince)) / 3_600_000 : 0;
+  if (blindHours >= BLIND_HOURS_BEFORE_ALERT && !state.blindAlertSent && !config.dryRun) {
     const reason = report.error ?? 'the size swatches were not found on the page';
     await notifyAll(
       notifyConfig,
-      `Roots watcher can't read the page (${state.blindRuns} checks in a row): ${reason}\n${config.url}`,
+      `Roots watcher can't read the page (${state.blindRuns} checks over ${blindHours.toFixed(1)}h): ` +
+        `${reason}\n${config.url}`,
       { kind: 'watcher-error', url: config.url },
     );
     state.blindAlertSent = true;
@@ -543,11 +561,10 @@ async function main() {
   if (!config.json) {
     console.log(ui.renderBanner());
     console.log(`${ui.bold('Watching')} ${config.url}`);
-    console.log(
-      `${ui.EYE} ${config.sizes.map((size) => ui.pill(size, 'watching')).join(' ')}${
-        config.watch ? ui.dim(`  every ${config.intervalMinutes} min`) : ''
-      }`,
-    );
+    const cadence = config.watch
+      ? `  every ${config.intervalMinutes} min${config.maxMinutes > 0 ? ` for ${config.maxMinutes} min` : ''}`
+      : '';
+    console.log(`${ui.EYE} ${config.sizes.map((size) => ui.pill(size, 'watching')).join(' ')}${ui.dim(cadence)}`);
     console.log();
   }
 
@@ -555,17 +572,38 @@ async function main() {
     return runCheck(config, notifyConfig);
   }
 
+  const deadline = config.maxMinutes > 0 ? Date.now() + config.maxMinutes * 60_000 : Infinity;
+  let sawInStock = false;
+  let lastCode = 0;
+
   for (;;) {
+    // A little jitter so we're not hitting the origin on an exact cadence.
+    // Scaled to the interval, so a short cadence doesn't get stretched by a
+    // whole minute. Computed *before* the check so the interval is measured
+    // start-to-start: otherwise a slow fetch (three retries, 30s timeouts)
+    // pushes every subsequent check later and the cadence drifts.
+    const jitterMs = Math.floor(Math.random() * Math.min(60_000, config.intervalMinutes * 6_000));
+    const nextAt = Date.now() + config.intervalMinutes * 60_000 + jitterMs;
+
     try {
-      await runCheck(config, notifyConfig);
+      lastCode = await runCheck(config, notifyConfig);
+      if (lastCode === 10) sawInStock = true;
     } catch (error) {
       // The loop outliving any single failure is the whole point of the loop.
       console.error(`Check failed: ${error.stack ?? error}`);
+      lastCode = 20;
     }
-    // A little jitter so we're not hitting the origin on an exact cadence.
-    const jitterMs = Math.floor(Math.random() * 60_000);
-    await sleep(config.intervalMinutes * 60_000 + jitterMs);
+
+    // Stop rather than start a check we'd have to cut short. On Actions this
+    // is what lets the job finish on its own terms, so the post-job cache save
+    // still runs and the next session picks the alert state back up.
+    if (nextAt > deadline) break;
+    await sleep(Math.max(0, nextAt - Date.now()));
   }
+
+  // 10 outranks 20: a restock seen during the session is the thing worth
+  // reporting, even if a later check came back unreadable.
+  return sawInStock ? 10 : lastCode;
 }
 
 // Only run when invoked directly, so the check can also be imported.
