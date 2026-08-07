@@ -205,10 +205,34 @@ describe('JSON-LD parsing', () => {
 
     expect(summary).toEqual({
       name: 'Roots x Big Apple T-Shirt',
+      image: null,
       price: '48.00',
       currency: 'CAD',
       anyInStock: true,
     });
+  });
+
+  it('reads an image whether it is a bare URL, an array, or an ImageObject', () => {
+    const bareUrl = summarizeJsonLd(
+      extractJsonLd(
+        '<script type="application/ld+json">{"@type":"Product","name":"A","image":"https://example.com/a.jpg"}</script>',
+      ),
+    );
+    expect(bareUrl?.image).toBe('https://example.com/a.jpg');
+
+    const array = summarizeJsonLd(
+      extractJsonLd(
+        '<script type="application/ld+json">{"@type":"Product","name":"A","image":["https://example.com/b.jpg"]}</script>',
+      ),
+    );
+    expect(array?.image).toBe('https://example.com/b.jpg');
+
+    const imageObject = summarizeJsonLd(
+      extractJsonLd(
+        '<script type="application/ld+json">{"@type":"Product","name":"A","image":{"@type":"ImageObject","url":"https://example.com/c.jpg"}}</script>',
+      ),
+    );
+    expect(imageObject?.image).toBe('https://example.com/c.jpg');
   });
 
   it('returns null when the page contains no product data', () => {

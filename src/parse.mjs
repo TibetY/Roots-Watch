@@ -265,10 +265,24 @@ export function summarizeJsonLd(blocks) {
 
   return {
     name: typeof product.name === 'string' ? product.name : null,
+    image: firstImageUrl(product.image),
     price: offers[0]?.price ?? product.offers?.price ?? null,
     currency: offers[0]?.priceCurrency ?? null,
     anyInStock: offers.length ? anyInStock : null,
   };
+}
+
+/**
+ * JSON-LD's `image` is underspecified — a bare URL string, an array of them,
+ * or an ImageObject with a `url` field are all seen in the wild. Used for the
+ * dashboard's product thumbnails; nothing breaks if this comes back null.
+ */
+function firstImageUrl(value) {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return firstImageUrl(value[0]);
+  if (typeof value === 'object') return typeof value.url === 'string' ? value.url : null;
+  return null;
 }
 
 /**

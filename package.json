@@ -4,10 +4,15 @@
   "private": true,
   "description": "Watches roots.com product sizes and sends a push notification with a buy link the moment one is back in stock",
   "type": "module",
+  "bin": {
+    "roots-watch": "src/index.mjs"
+  },
   "engines": {
     "node": ">=18"
   },
   "scripts": {
+    "start": "node src/index.mjs",
+    "ui": "node src/server.mjs",
     "check": "node src/index.mjs --once",
     "watch": "node src/index.mjs --watch",
     "test": "vitest run",

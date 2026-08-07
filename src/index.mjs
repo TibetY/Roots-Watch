@@ -43,12 +43,14 @@ import {
   summarizeJsonLd,
 } from './parse.mjs';
 import { hasAnyChannel, notifyAll, readNotifyConfig } from './notify.mjs';
+import * as ui from './ui.mjs';
+import { runInteractive } from './tui.mjs';
 
-const DEFAULT_URL =
+export const DEFAULT_URL =
   'https://www.roots.com/ca/en/roots-x-big-apple-t-shirt-27190104.html?dwvar_27190104_color=12B';
-const DEFAULT_SIZES = '3,5';
+export const DEFAULT_SIZES = '3,5';
 const DEFAULT_INTERVAL_MINUTES = 30;
-const DEFAULT_RENOTIFY_HOURS = 6;
+export const DEFAULT_RENOTIFY_HOURS = 6;
 // Two hours of consecutive blindness before we bother the user about it. Short
 // enough to catch a real breakage the same morning, long enough to ride out a
 // transient 403 or a maintenance window. Checks run every 10 minutes (locally
@@ -124,7 +126,8 @@ export function buildConfig(argv, env) {
 const USAGE = `Roots stock watcher
 
 Usage:
-  node src/index.mjs [options]
+  node src/index.mjs                 Interactive menu (needs a real terminal).
+  node src/index.mjs [options]       Scripted run — see below.
 
 Options:
   --url <url>              Product page URL (with the dwvar colour param).
@@ -141,12 +144,27 @@ Options:
 
 Environment:
   ROOTS_WATCH_WEBHOOK, ROOTS_WATCH_WEBHOOK_TOPIC  -> notifications (ntfy, Slack, Discord, Pushover, ...)
+  NO_COLOR                                        -> disable coloured output
 
 Exit codes:
   0  checked successfully, nothing in stock
   10 at least one watched size is in stock
   20 could not determine availability
 `;
+
+function printUsage() {
+  console.log(ui.renderBanner());
+  if (!ui.useColor) {
+    console.log(USAGE);
+    return;
+  }
+  console.log(
+    USAGE.replace(/^(Usage:|Options:|Environment:|Exit codes:)$/gm, (heading) => ui.bold(heading)).replace(
+      /^( {2}--[\w-]+(?: <[\w-]+>)?)/gm,
+      (flag) => ui.cyan(flag),
+    ),
+  );
+}
 
 /** Fetch with a couple of retries — a single blip shouldn't skip a slot. */
 async function fetchWithRetry(url, { attempts = 3, timeoutMs = 30_000, headers = BROWSER_HEADERS } = {}) {
@@ -214,7 +232,7 @@ function sleep(ms) {
  * win, which is what makes this a no-op on GitHub Actions, where the real
  * values arrive as secrets.
  */
-async function loadDotEnv(path) {
+export async function loadDotEnv(path) {
   let contents;
   try {
     contents = await readFile(path, 'utf8');
@@ -248,8 +266,8 @@ async function saveState(path, state) {
  * Run one availability check.
  *
  * @returns {Promise<{results: Array, confidence: string, productName: string|null,
- *                    price: unknown, currency: string|null, error: string|null,
- *                    source: string, allSizes: Array}>}
+ *                    image: string|null, price: unknown, currency: string|null,
+ *                    error: string|null, source: string, allSizes: Array}>}
  */
 export async function checkOnce(config) {
   const { origin, pid, color } = parseProductUrl(config.url);
@@ -301,6 +319,7 @@ export async function checkOnce(config) {
     confidence: reading.confidence,
     source,
     productName: reading.productName ?? jsonLd?.name ?? null,
+    image: jsonLd?.image ?? null,
     price: jsonLd?.price ?? null,
     currency: jsonLd?.currency ?? null,
     error: null,
@@ -314,6 +333,7 @@ function blindResult(config, message) {
     confidence: 'low',
     source: 'none',
     productName: null,
+    image: null,
     price: null,
     currency: null,
     error: message,
@@ -347,17 +367,28 @@ function alertTitle(inStock) {
   return `Roots in stock — size ${sizeListText(inStock)}`;
 }
 
-function describe(report) {
-  const parts = report.results.map((entry) => {
-    const label = entry.matchedLabel ? `${entry.wanted} (${entry.matchedLabel})` : entry.wanted;
-    const symbol = entry.status === IN_STOCK ? 'IN STOCK' : entry.status === OUT_OF_STOCK ? 'sold out' : 'unknown';
-    return `size ${label}: ${symbol}`;
-  });
-  return parts.join(', ');
+function pillStatus(entry) {
+  if (entry.status === IN_STOCK) return 'good';
+  if (entry.status === OUT_OF_STOCK) return 'bad';
+  return 'unknown';
 }
 
-async function runCheck(config, notifyConfig) {
-  const startedAt = new Date();
+/** One colour-coded pill per watched size — the status at a glance, not a sentence. */
+function sizeBadgeRow(report) {
+  return report.results.map((entry) => ui.pill(entry.matchedLabel ?? entry.wanted, pillStatus(entry))).join(' ');
+}
+
+/**
+ * Run one check, update alert state, notify if warranted — everything
+ * `runCheck` does except printing. Split out so the HTML dashboard's server
+ * can drive the same tested logic (dedupe, blind-run tracking, notify) for
+ * each watched item and get a structured result back, instead of only an
+ * exit code and a console log.
+ *
+ * @returns {Promise<{report: object, inStock: Array, allUnknown: boolean,
+ *                    shouldAlert: Array, notifications: Array, summary: object}>}
+ */
+export async function evaluateCheck(config, notifyConfig, startedAt = new Date()) {
   const report = await checkOnce(config);
   const state = await loadState(config.statePath);
   const nowMs = startedAt.getTime();
@@ -416,29 +447,62 @@ async function runCheck(config, notifyConfig) {
     checkedAt: startedAt.toISOString(),
     url: config.url,
     product: report.productName,
+    image: report.image,
+    price: report.price,
+    currency: report.currency,
     source: report.source,
     confidence: report.confidence,
     error: report.error,
     sizes: report.results,
     alerted: shouldAlert.map((entry) => entry.wanted),
     notifications,
+    buyLink: inStock.length ? buyLink(config, inStock[0]?.matchedLabel ?? inStock[0]?.wanted) : null,
   };
+
+  return { report, inStock, allUnknown, shouldAlert, notifications, summary };
+}
+
+export async function runCheck(config, notifyConfig) {
+  const startedAt = new Date();
+  const { report, inStock, allUnknown, shouldAlert, notifications, summary } = await evaluateCheck(
+    config,
+    notifyConfig,
+    startedAt,
+  );
 
   if (config.json) {
     console.log(JSON.stringify(summary, null, 2));
   } else {
     const stamp = startedAt.toLocaleString('en-CA', { timeZone: 'America/Toronto' });
-    console.log(`[${stamp}] ${describe(report)} — via ${report.source} (${report.confidence} confidence)`);
-    if (report.error) console.error(`  ! ${report.error}`);
+    const confidenceBadge =
+      report.confidence === 'high' ? ui.green('high confidence') : ui.yellow(`${report.confidence} confidence`);
+
+    console.log(`  ${sizeBadgeRow(report)}`);
+    console.log(ui.dim(`  ${stamp} · via ${report.source} · ${confidenceBadge}`));
+    if (report.error) console.error(`  ${ui.red(`! ${report.error}`)}`);
     if (report.allSizes.length) {
-      console.log(`  sizes on page: ${report.allSizes.map((size) => size.label).join(', ')}`);
+      console.log(ui.dim(`  sizes on page: ${report.allSizes.map((size) => size.label).join(', ')}`));
     }
     for (const note of notifications) {
       const target = note.target ? ` -> ${note.target}` : '';
-      console.log(`  ${note.ok ? 'sent' : 'FAILED'} via ${note.channel}${target}${note.detail ? `: ${note.detail}` : ''}`);
+      const status = note.ok ? ui.green('sent') : ui.red('FAILED');
+      console.log(`  ${status} via ${note.channel}${target}${note.detail ? ui.dim(`: ${note.detail}`) : ''}`);
+    }
+    if (inStock.length) {
+      console.log();
+      console.log(
+        ui.box(
+          [
+            `🛒 BUY NOW — ${report.productName ?? 'Roots item'}`,
+            `Size ${sizeListText(inStock)}`,
+            buyLink(config, inStock[0]?.matchedLabel ?? inStock[0]?.wanted),
+          ],
+          { borderColor: ui.green },
+        ),
+      );
     }
     if (shouldAlert.length && config.dryRun) {
-      console.log(`  [dry run] would have sent: ${formatAlert(config, report, shouldAlert).replace(/\n/g, ' ')}`);
+      console.log(ui.dim(`  [dry run] would have sent: ${formatAlert(config, report, shouldAlert).replace(/\n/g, ' ')}`));
     }
   }
 
@@ -453,20 +517,39 @@ async function main() {
 
   const config = buildConfig(process.argv.slice(2), process.env);
   if (config.help) {
-    console.log(USAGE);
+    printUsage();
     return 0;
   }
 
   const notifyConfig = readNotifyConfig(process.env);
-  if (!hasAnyChannel(notifyConfig) && !config.dryRun) {
+  const hasChannel = hasAnyChannel(notifyConfig);
+  if (!hasChannel && !config.dryRun) {
     console.warn(
-      'Warning: no notification channel configured — results will only be printed here.\n' +
-        '  Set ROOTS_WATCH_WEBHOOK (and ROOTS_WATCH_WEBHOOK_TOPIC for ntfy) to get alerts.',
+      ui.yellow(
+        'Warning: no notification channel configured — results will only be printed here.\n' +
+          '  Set ROOTS_WATCH_WEBHOOK (and ROOTS_WATCH_WEBHOOK_TOPIC for ntfy) to get alerts.',
+      ),
     );
   }
 
-  console.log(`Watching ${config.url}`);
-  console.log(`Sizes: ${config.sizes.join(', ')}${config.watch ? ` — every ${config.intervalMinutes} min` : ''}`);
+  // A bare invocation — no flags at all — in a real terminal gets the
+  // interactive menu. Anything scripted (CI, cron, `--once`, `--json`, ...)
+  // keeps the plain flag-driven path below untouched.
+  const bareInvocation = process.argv.length === 2;
+  if (bareInvocation && process.stdin.isTTY && process.stdout.isTTY) {
+    return runInteractive({ config, notifyConfig, hasChannel, runCheck });
+  }
+
+  if (!config.json) {
+    console.log(ui.renderBanner());
+    console.log(`${ui.bold('Watching')} ${config.url}`);
+    console.log(
+      `${ui.EYE} ${config.sizes.map((size) => ui.pill(size, 'watching')).join(' ')}${
+        config.watch ? ui.dim(`  every ${config.intervalMinutes} min`) : ''
+      }`,
+    );
+    console.log();
+  }
 
   if (!config.watch) {
     return runCheck(config, notifyConfig);

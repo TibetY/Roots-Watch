@@ -15,6 +15,12 @@ The one package in `package.json` is vitest, for the tests.
 ## Quick start
 
 ```bash
+# HTML dashboard — watch as many products as you want, opens in your browser.
+npm run ui
+
+# Interactive terminal menu — a ROOTS logo, then choose what to run.
+npm start
+
 # One check, nothing sent — just prints what it sees.
 node src/index.mjs --once --dry-run
 
@@ -22,10 +28,90 @@ node src/index.mjs --once --dry-run
 npm run watch
 ```
 
+## HTML dashboard
+
+`npm run ui` starts a small local server (opens `http://127.0.0.1:4321` in your
+browser automatically) for watching **more than one product at once** — the
+CLI and terminal menu are built around a single URL/sizes pair; the dashboard
+is the multi-item version of the same watcher.
+
+- **Add** as many product URLs as you want, each with its own sizes and a
+  label. Every item gets its own alert-dedupe state, so they don't interfere
+  with each other or with the single-item CLI.
+- Each card shows size availability as coloured pills — **green** for in
+  stock, **red** for sold out, gold for unknown — plus the product image,
+  price, and a pulsing **Buy now** button the moment something's available.
+- One **auto-run** toggle and interval (5/15/30 min, 1/6 hr, or custom)
+  controls the whole watchlist; a staggered background sweep checks each
+  enabled item in turn so a big list doesn't hit roots.com all at once.
+  Pause/resume individual items, or trigger **Check now** / **Check all** on
+  demand.
+- **⚙ Settings** covers both alert channels in one place:
+  - **Push notifications** — set the webhook URL and (for ntfy) topic right
+    in the browser, no `.env` editing required. **Send test** fires one
+    immediately so you can confirm it actually arrives before waiting on a
+    real restock. Saving here writes `ROOTS_WATCH_WEBHOOK` /
+    `ROOTS_WATCH_WEBHOOK_TOPIC` into `.env` in place — it's the same setting
+    the CLI reads, so this doubles as the easiest way to set it up in the
+    first place.
+  - **Browser alerts** — native OS notifications from the dashboard tab
+    while it's open, on top of push notifications, not instead of them. A
+    one-click toggle handles the permission prompt.
+  - The header line always shows a quick summary (`push + browser`, `push`,
+    or `no alerts set up`) without opening the dialog.
+- The watchlist lives in `watchlist.json` at the repo root (gitignored, like
+  `.watch-state.json`) — a plain JSON file you can also hand-edit. It's seeded
+  with the CLI's single default item the first time there's nothing there.
+
+The server binds to `127.0.0.1` only (not your network). Change the port with
+`ROOTS_WATCH_UI_PORT`, or set `ROOTS_WATCH_NO_OPEN=1` to skip the automatic
+browser launch. Leave the terminal it's running in open — Ctrl+C there stops
+it, same as any other long-running dev server.
+
+## Interactive CLI
+
+Running the watcher with no flags at all, in a real terminal, opens a small
+menu instead of just checking once:
+
+```
+  1  Start          configure & run a check
+  2  Settings       url · sizes · notifications
+  Q  Quit
+```
+
+**Start** opens a run form — arrow keys move between fields, ←/→ change a
+value, Enter starts:
+
+```
+  Auto-run       Yes   No
+  Frequency      5min  15min  30min  1hr  6hr  Custom
+  Duration       Forever  1 day  2 days  7 days
+```
+
+Duration is how long the auto-run session keeps going before it stops itself
+and drops back to the menu — `Forever` runs until you cancel it. Once it's
+running, **Ctrl+C cancels the auto-run and returns to the menu — it does not
+exit the CLI.** (At the menu itself, Ctrl+C does quit.)
+
+**Settings** shows the current URL, sizes, and whether a notification channel
+is configured, and lets you edit URL/sizes for the session (these edits don't
+touch `.env`).
+
+This only engages for a bare invocation (`node src/index.mjs` / `npm start` /
+`roots-watch`, no flags) in a TTY — anything scripted, including every command
+below and the GitHub Actions workflow, keeps working exactly as documented and
+never sees the menu. `npm link` installs the `roots-watch` command if you'd
+rather not type `node src/index.mjs`.
+
+Colour throughout (menu and scripted output alike) respects [`NO_COLOR`](https://no-color.org)
+and auto-disables when output isn't a terminal (e.g. piped to a file).
+
 ## Setting up notifications
 
 Alerts go out through a generic JSON webhook. Configure it in the environment
-before running the watcher.
+before running the watcher — or, if you're using the [HTML dashboard](#html-dashboard),
+its **⚙ Settings** panel does this same thing from the browser, test button
+included.
 
 ```bash
 cp .env.example .env   # then fill it in — .env is gitignored
@@ -139,8 +225,18 @@ the real page can tell you whether the site changed shape underneath it.
 ## Layout
 
 ```
-src/index.mjs   CLI, scheduling, alert dedupe, state
-src/parse.mjs   All page parsing — pure functions, no I/O
-src/notify.mjs  Webhook delivery (ntfy, Slack, Discord, Pushover, ...)
-test/           Fixture-based tests for the parsers
+src/index.mjs      CLI entry point, checking/alerting logic (evaluateCheck), state
+src/parse.mjs      All page parsing — pure functions, no I/O
+src/notify.mjs     Webhook delivery (ntfy, Slack, Discord, Pushover, ...)
+src/ui.mjs         Colours, the ROOTS wordmark, screen/box primitives
+src/tui.mjs        The interactive terminal menu (see "Interactive CLI" above)
+src/items.mjs      The dashboard's watchlist store (watchlist.json CRUD)
+src/server.mjs     The dashboard's HTTP server + scheduler (see "HTML dashboard" above)
+public/dashboard.html  The dashboard's frontend — plain HTML/CSS/JS, no build step
+test/              Fixture-based tests for the parsers
 ```
+
+`evaluateCheck` (in `index.mjs`) is the shared core — one check, alert
+dedupe, and notification — that both the CLI's `runCheck` (adds console
+output) and the dashboard's `checkItem` (adds the JSON API) build on, so
+"in stock" means the same thing and fires the same webhook everywhere.
