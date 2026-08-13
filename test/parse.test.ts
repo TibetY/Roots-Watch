@@ -13,7 +13,7 @@ import {
   normalizeSize,
   parseProductUrl,
   summarizeJsonLd,
-} from '../src/parse.mjs';
+} from "../app/lib/parse";
 
 // The watcher can't be tested against the live site from CI (and shouldn't be —
 // a test suite that hammers roots.com every push is a bad neighbour), so these

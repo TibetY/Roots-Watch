@@ -1,7 +1,7 @@
-// Parsing helpers for roots.com product pages.
+// Parsing helpers for Salesforce Commerce Cloud (SFRA) product pages —
+// roots.com is the one this was written against.
 //
-// roots.com runs on Salesforce Commerce Cloud (SFRA). Two things give it away
-// and both are load-bearing here:
+// Two things give SFRA away, and both are load-bearing here:
 //
 //   1. PDP URLs look like `/ca/en/<slug>-<masterId>.html`
 //   2. Variants are selected with `?dwvar_<masterId>_<attribute>=<value>`
@@ -19,27 +19,57 @@
 // answer "unknown" — a wrong "in stock" costs the user a pointless trip to a
 // sold-out page, and a wrong "out of stock" means they miss the restock
 // entirely, so guessing is worse than admitting we couldn't tell.
+//
+// Pure functions only, no I/O — which is why this is the part with real tests.
 
 /** Availability of a single size. */
-export const IN_STOCK = 'in_stock';
-export const OUT_OF_STOCK = 'out_of_stock';
-export const UNKNOWN = 'unknown';
+export const IN_STOCK = "in_stock" as const;
+export const OUT_OF_STOCK = "out_of_stock" as const;
+export const UNKNOWN = "unknown" as const;
 
-const SIZE_ATTRIBUTE_IDS = ['size', 'kidssize', 'shoesize', 'babysize'];
+export type SizeStatus = typeof IN_STOCK | typeof OUT_OF_STOCK | typeof UNKNOWN;
+export type Confidence = "high" | "low";
 
-/**
- * Pull the master product id and selected colour out of a PDP URL.
- *
- * @param {string} rawUrl
- * @returns {{ origin: string, pid: string|null, color: string|null, url: string }}
- */
-export function parseProductUrl(rawUrl) {
+/** One size as the page lists it. */
+export type PageSize = { value: string; label: string; status: SizeStatus };
+
+/** What an extractor managed to read off a page. */
+export type SizeReading = {
+  sizes: PageSize[];
+  productName?: string | null;
+  confidence: Confidence;
+};
+
+/** A size the user asked to watch, matched against what the page had. */
+export type WantedSize = {
+  wanted: string;
+  matchedLabel: string | null;
+  status: SizeStatus;
+};
+
+export type JsonLdSummary = {
+  name: string | null;
+  image: string | null;
+  price: unknown;
+  currency: string | null;
+  anyInStock: boolean | null;
+};
+
+const SIZE_ATTRIBUTE_IDS = ["size", "kidssize", "shoesize", "babysize"];
+
+/** Pull the master product id and selected colour out of a PDP URL. */
+export function parseProductUrl(rawUrl: string): {
+  origin: string;
+  pid: string | null;
+  color: string | null;
+  url: string;
+} {
   const url = new URL(rawUrl);
 
   // The dwvar_<pid>_<attr> query params are the most reliable source of the
   // master id, because the slug portion of the path is free-form marketing
   // text and only *usually* ends in the id.
-  let pid = null;
+  let pid: string | null = null;
   for (const key of url.searchParams.keys()) {
     const match = key.match(/^dwvar_([^_]+)_/);
     if (match) {
@@ -59,11 +89,11 @@ export function parseProductUrl(rawUrl) {
 }
 
 /** Decode the handful of HTML entities that show up inside URL attributes. */
-function decodeEntities(value) {
+function decodeEntities(value: string): string {
   return value
-    .replace(/&amp;/g, '&')
+    .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
-    .replace(/&#x2F;/g, '/')
+    .replace(/&#x2F;/g, "/")
     .replace(/&#39;/g, "'");
 }
 
@@ -75,12 +105,8 @@ function decodeEntities(value) {
  * read whatever the page itself is using. If no Product-Variation URL is
  * present we rebuild one from any other Demandware controller URL on the page,
  * since they all share the same prefix.
- *
- * @param {string} html
- * @param {string} origin e.g. "https://www.roots.com"
- * @returns {string|null} absolute endpoint URL, without query string
  */
-export function discoverVariationEndpoint(html, origin) {
+export function discoverVariationEndpoint(html: string, origin: string): string | null {
   const direct = html.match(
     /(?:https?:\/\/[^/"'\s]+)?\/on\/demandware\.store\/Sites-[^/"'\s]+-Site\/[^/"'\s]+\/Product-Variation/i,
   );
@@ -90,28 +116,26 @@ export function discoverVariationEndpoint(html, origin) {
     /(?:https?:\/\/[^/"'\s]+)?\/on\/demandware\.store\/Sites-[^/"'\s]+-Site\/[^/"'\s]+\//i,
   );
   if (anyController) {
-    return absolutize(decodeEntities(anyController[0]) + 'Product-Variation', origin);
+    return absolutize(decodeEntities(anyController[0]) + "Product-Variation", origin);
   }
 
   return null;
 }
 
-function absolutize(path, origin) {
+function absolutize(path: string, origin: string): string {
   return /^https?:\/\//i.test(path) ? path : new URL(path, origin).toString();
 }
 
-/**
- * Build the Product-Variation request for a given colour (and optionally size).
- *
- * @param {string} endpoint
- * @param {{ pid: string, color?: string|null, size?: string|null }} params
- */
-export function buildVariationUrl(endpoint, { pid, color, size }) {
+/** Build the Product-Variation request for a given colour (and optionally size). */
+export function buildVariationUrl(
+  endpoint: string,
+  { pid, color, size }: { pid: string; color?: string | null; size?: string | null },
+): string {
   const url = new URL(endpoint);
-  url.searchParams.set('pid', pid);
+  url.searchParams.set("pid", pid);
   if (color) url.searchParams.set(`dwvar_${pid}_color`, color);
   if (size) url.searchParams.set(`dwvar_${pid}_size`, size);
-  url.searchParams.set('quantity', '1');
+  url.searchParams.set("quantity", "1");
   return url.toString();
 }
 
@@ -121,29 +145,26 @@ export function buildVariationUrl(endpoint, { pid, color, size }) {
  * SFRA marks a variant `selectable: false` when it is out of stock or
  * otherwise unorderable, which is the signal we want. `selected` tells us
  * which value is currently active and is deliberately ignored.
- *
- * @param {unknown} payload parsed JSON
- * @returns {{ sizes: Array<{value: string, label: string, status: string}>, productName: string|null, confidence: string }|null}
  */
-export function extractSizesFromVariationJson(payload) {
+export function extractSizesFromVariationJson(payload: any): SizeReading | null {
   const product = payload?.product ?? payload;
   const attributes = product?.variationAttributes;
   if (!Array.isArray(attributes)) return null;
 
-  const sizeAttr = attributes.find((attr) => {
-    const id = String(attr?.id ?? attr?.attributeId ?? '').toLowerCase();
-    const name = String(attr?.displayName ?? '').toLowerCase();
+  const sizeAttr = attributes.find((attr: any) => {
+    const id = String(attr?.id ?? attr?.attributeId ?? "").toLowerCase();
+    const name = String(attr?.displayName ?? "").toLowerCase();
     return SIZE_ATTRIBUTE_IDS.includes(id) || /size/.test(id) || /size/.test(name);
   });
 
   if (!sizeAttr || !Array.isArray(sizeAttr.values)) return null;
 
-  const sizes = sizeAttr.values.map((value) => {
-    const label = String(value?.displayValue ?? value?.value ?? value?.id ?? '').trim();
+  const sizes: PageSize[] = sizeAttr.values.map((value: any) => {
+    const label = String(value?.displayValue ?? value?.value ?? value?.id ?? "").trim();
     // `selectable` is authoritative when present. When it is missing entirely
     // we must not invent an answer — an absent flag is not a false one.
-    const status =
-      typeof value?.selectable === 'boolean'
+    const status: SizeStatus =
+      typeof value?.selectable === "boolean"
         ? value.selectable
           ? IN_STOCK
           : OUT_OF_STOCK
@@ -154,11 +175,11 @@ export function extractSizesFromVariationJson(payload) {
   return {
     sizes,
     productName: product?.productName ?? product?.name ?? null,
-    confidence: 'high',
+    confidence: "high",
   };
 }
 
-// Class names SFRA (and Roots' theme on top of it) uses to grey out a swatch.
+// Class names SFRA (and a shop's theme on top of it) uses to grey out a swatch.
 const UNAVAILABLE_MARKERS =
   /\b(unselectable|disabled|unavailable|out-of-stock|outofstock|oos|not-available|sold-?out)\b/i;
 
@@ -169,20 +190,17 @@ const UNAVAILABLE_MARKERS =
  * see that it is *not* marked unavailable, but "no negative marker" is weaker
  * evidence than SFRA telling us `selectable: true` — a restyled theme could
  * drop the class we look for and every size would look buyable.
- *
- * @param {string} html
- * @returns {{ sizes: Array<{value: string, label: string, status: string}>, confidence: string }}
  */
-export function extractSizesFromHtml(html) {
-  const sizes = [];
-  const seen = new Set();
+export function extractSizesFromHtml(html: string): SizeReading {
+  const sizes: PageSize[] = [];
+  const seen = new Set<string>();
 
   // Every swatch — colour and size alike — carries data-attr-value. We keep
   // them all and let the caller match the sizes it cares about, rather than
   // trying to infer which group a swatch belongs to from the markup.
   const tagPattern = /<(button|a|li|span|input)\b([^>]*\bdata-attr-value=("|')(.*?)\3[^>]*)>/gi;
 
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = tagPattern.exec(html)) !== null) {
     const attrs = match[2];
     const value = decodeEntities(match[4]).trim();
@@ -190,11 +208,11 @@ export function extractSizesFromHtml(html) {
     seen.add(value);
 
     const classMatch = attrs.match(/\bclass=("|')(.*?)\1/i);
-    const className = classMatch ? classMatch[2] : '';
+    const className = classMatch ? classMatch[2] : "";
     const explicitlyDisabled = /\bdisabled\b/i.test(attrs);
     const dataAvailable = attrs.match(/\bdata-available=("|')(.*?)\1/i);
 
-    let status;
+    let status: SizeStatus;
     if (dataAvailable) {
       status = /^true$/i.test(dataAvailable[2]) ? IN_STOCK : OUT_OF_STOCK;
     } else if (UNAVAILABLE_MARKERS.test(className) || explicitlyDisabled) {
@@ -206,20 +224,15 @@ export function extractSizesFromHtml(html) {
     sizes.push({ value, label: value, status });
   }
 
-  return { sizes, confidence: 'low' };
+  return { sizes, confidence: "low" };
 }
 
-/**
- * Parse every JSON-LD block on the page.
- *
- * @param {string} html
- * @returns {unknown[]}
- */
-export function extractJsonLd(html) {
-  const blocks = [];
+/** Parse every JSON-LD block on the page. */
+export function extractJsonLd(html: string): unknown[] {
+  const blocks: unknown[] = [];
   const pattern = /<script[^>]*type=("|')application\/ld\+json\1[^>]*>([\s\S]*?)<\/script>/gi;
 
-  let match;
+  let match: RegExpExecArray | null;
   while ((match = pattern.exec(html)) !== null) {
     try {
       blocks.push(JSON.parse(match[2].trim()));
@@ -232,26 +245,24 @@ export function extractJsonLd(html) {
 }
 
 /**
- * Pull product name / price / offer availability out of JSON-LD.
+ * Pull product name / image / price / offer availability out of JSON-LD.
  *
- * Used for the message body (name and price) and as a sanity check on the
- * swatch reading. Offers here often describe the master product rather than
- * per-size variants, so it is never the sole basis for an alert.
- *
- * @param {unknown[]} blocks
+ * Used for the message body and the dashboard's product card, and as a sanity
+ * check on the swatch reading. Offers here often describe the master product
+ * rather than per-size variants, so it is never the sole basis for an alert.
  */
-export function summarizeJsonLd(blocks) {
-  const flat = [];
-  for (const block of blocks) {
+export function summarizeJsonLd(blocks: unknown[]): JsonLdSummary | null {
+  const flat: any[] = [];
+  for (const block of blocks as any[]) {
     if (Array.isArray(block)) flat.push(...block);
-    else if (block && typeof block === 'object' && Array.isArray(block['@graph'])) {
-      flat.push(...block['@graph']);
+    else if (block && typeof block === "object" && Array.isArray(block["@graph"])) {
+      flat.push(...block["@graph"]);
     } else if (block) flat.push(block);
   }
 
   const product = flat.find((node) => {
-    const type = node?.['@type'];
-    return type === 'Product' || (Array.isArray(type) && type.includes('Product'));
+    const type = node?.["@type"];
+    return type === "Product" || (Array.isArray(type) && type.includes("Product"));
   });
   if (!product) return null;
 
@@ -261,10 +272,12 @@ export function summarizeJsonLd(blocks) {
       : [product.offers]
     : [];
 
-  const anyInStock = offers.some((offer) => /instock|limitedavailability/i.test(String(offer?.availability ?? '')));
+  const anyInStock = offers.some((offer: any) =>
+    /instock|limitedavailability/i.test(String(offer?.availability ?? "")),
+  );
 
   return {
-    name: typeof product.name === 'string' ? product.name : null,
+    name: typeof product.name === "string" ? product.name : null,
     image: firstImageUrl(product.image),
     price: offers[0]?.price ?? product.offers?.price ?? null,
     currency: offers[0]?.priceCurrency ?? null,
@@ -275,13 +288,16 @@ export function summarizeJsonLd(blocks) {
 /**
  * JSON-LD's `image` is underspecified — a bare URL string, an array of them,
  * or an ImageObject with a `url` field are all seen in the wild. Used for the
- * dashboard's product thumbnails; nothing breaks if this comes back null.
+ * product thumbnails; nothing breaks if this comes back null.
  */
-function firstImageUrl(value) {
+function firstImageUrl(value: unknown): string | null {
   if (!value) return null;
-  if (typeof value === 'string') return value;
+  if (typeof value === "string") return value;
   if (Array.isArray(value)) return firstImageUrl(value[0]);
-  if (typeof value === 'object') return typeof value.url === 'string' ? value.url : null;
+  if (typeof value === "object") {
+    const url = (value as { url?: unknown }).url;
+    return typeof url === "string" ? url : null;
+  }
   return null;
 }
 
@@ -291,28 +307,20 @@ function firstImageUrl(value) {
  * Kids sizing is written inconsistently — "3", "3T", "3 (3T)", "3Y" all mean
  * the same rack. Strip decoration so a watch for "3" matches all of them, but
  * keep it strict enough that "3" never matches "13".
- *
- * @param {string|number} size
  */
-export function normalizeSize(size) {
+export function normalizeSize(size: string | number): string {
   const raw = String(size).trim().toUpperCase();
-  const withoutParens = raw.replace(/\s*\(.*?\)\s*/g, '');
-  return withoutParens.replace(/\s+/g, '').replace(/(?<=\d)[TY]$/, '');
+  const withoutParens = raw.replace(/\s*\(.*?\)\s*/g, "");
+  return withoutParens.replace(/\s+/g, "").replace(/(?<=\d)[TY]$/, "");
 }
 
-/**
- * Match the sizes we're watching against what the page reported.
- *
- * @param {Array<{value: string, label: string, status: string}>} sizes
- * @param {string[]} wanted
- * @returns {Array<{wanted: string, matchedLabel: string|null, status: string}>}
- */
-export function matchWantedSizes(sizes, wanted) {
+/** Match the sizes we're watching against what the page reported. */
+export function matchWantedSizes(sizes: PageSize[], wanted: string[]): WantedSize[] {
   return wanted.map((want) => {
     const target = normalizeSize(want);
-    const hit = sizes.find((size) => {
-      return normalizeSize(size.label) === target || normalizeSize(size.value) === target;
-    });
+    const hit = sizes.find(
+      (size) => normalizeSize(size.label) === target || normalizeSize(size.value) === target,
+    );
     return {
       wanted: String(want),
       matchedLabel: hit ? hit.label : null,

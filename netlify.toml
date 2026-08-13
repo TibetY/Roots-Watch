@@ -1,0 +1,17 @@
+[build]
+  command = "npm run build"
+  # The React Router Netlify plugin emits the server handler and the static
+  # assets; it decides the publish directory, so nothing is hard-coded here.
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  # The sweep imports app/lib/*.server.ts directly rather than duplicating the
+  # checking logic. esbuild follows those imports at bundle time.
+  node_bundler = "esbuild"
+
+[dev]
+  command = "npm run dev"
+  targetPort = 5173
+  framework = "#custom"
