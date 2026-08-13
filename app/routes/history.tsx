@@ -128,7 +128,7 @@ function Figures({ stats }: { stats: WindowStats }) {
   );
 }
 
-type ItemRow = Awaited<ReturnType<typeof loader>>["items"][number];
+type ItemRow = Route.ComponentProps["loaderData"]["items"][number];
 
 function ItemHistory({
   item,

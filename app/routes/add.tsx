@@ -7,7 +7,7 @@ import { addItem, getItem, updateItem } from "~/lib/items.server";
 import { readSettings } from "~/lib/settings.server";
 import { requireUser } from "~/lib/supabase.server";
 import { checkItemNow } from "~/lib/watcher.server";
-import { DURATIONS } from "~/lib/display";
+import { alertDestination, DURATIONS } from "~/lib/display";
 import type { PageSize } from "~/lib/parse";
 
 export async function loader({ request }: Route.LoaderArgs) {

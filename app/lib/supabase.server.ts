@@ -67,16 +67,59 @@ export function sessionClient(request: Request): { db: Db; headers: Headers } {
   return { db, headers };
 }
 
+/**
+ * Who may use this deployment, by email address.
+ *
+ * This is the only access check fully under our control, so it runs on every
+ * request rather than once at the door. The alternatives all have holes:
+ * checking it only in the login route is bypassed by any other way of
+ * obtaining a session, and Supabase's own "allow new users to sign up" toggle
+ * governs account creation rather than who may sign in with an account that
+ * already exists.
+ *
+ * An empty list refuses everyone. A misconfiguration should fail shut.
+ */
+export function allowedEmails(): string[] {
+  return (process.env.ALLOWED_EMAILS ?? "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function allowlistConfigured(): boolean {
+  return allowedEmails().length > 0;
+}
+
+export function isAllowed(email: string | null | undefined): boolean {
+  const list = allowedEmails();
+  if (!list.length) return false;
+  return list.includes(String(email ?? "").trim().toLowerCase());
+}
+
 export type Session = { db: Db; userId: string; email: string; headers: Headers };
 
-/** The signed-in user, or null. Never throws for "not logged in". */
+/**
+ * The signed-in, allowed user — or null. Never throws for "not logged in".
+ *
+ * A session belonging to an address that isn't on the allowlist is torn down
+ * here rather than merely ignored: leaving it in place would let someone sit
+ * on a valid cookie indefinitely, and every request would pay to re-discover
+ * that they aren't welcome.
+ */
 export async function getSession(request: Request): Promise<Session | null> {
   const { db, headers } = sessionClient(request);
   // getUser() verifies the JWT with the auth server. getSession() only decodes
   // the cookie, which the client could have written itself.
   const { data, error } = await db.auth.getUser();
   if (error || !data.user) return null;
-  return { db, userId: data.user.id, email: data.user.email ?? "", headers };
+
+  const email = data.user.email ?? "";
+  if (!isAllowed(email)) {
+    await db.auth.signOut().catch(() => {});
+    return null;
+  }
+
+  return { db, userId: data.user.id, email, headers };
 }
 
 /** The signed-in user, or a redirect to the login screen. */

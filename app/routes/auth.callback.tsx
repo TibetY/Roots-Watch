@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 
 import type { Route } from "./+types/auth.callback";
-import { sessionClient } from "~/lib/supabase.server";
+import { isAllowed, sessionClient } from "~/lib/supabase.server";
 
 /**
  * Where the emailed link lands.
@@ -16,12 +16,48 @@ export async function loader({ request }: Route.LoaderArgs) {
   const code = url.searchParams.get("code");
   const next = url.searchParams.get("next") || "/";
 
-  if (!code) throw redirect("/login");
+  // Supabase reports its own refusals here before we ever see a code — an
+  // expired link, a disabled signup, a redirect URL that isn't allowlisted.
+  const supabaseError = url.searchParams.get("error_description") ?? url.searchParams.get("error");
+  if (supabaseError) {
+    throw redirect(`/login?error=${encodeURIComponent(supabaseError)}`);
+  }
+
+  if (!code) {
+    // No code and no error means the tokens came back in the URL fragment,
+    // which a server loader cannot see. That happens when the redirect URL
+    // isn't the one Supabase was told to use.
+    throw redirect(
+      `/login?error=${encodeURIComponent(
+        "The sign-in came back without a code. Check that this site's /auth/callback URL is " +
+          "listed under Authentication → URL Configuration → Redirect URLs in Supabase.",
+      )}`,
+    );
+  }
 
   const { db, headers } = sessionClient(request);
-  const { error } = await db.auth.exchangeCodeForSession(code);
+  const { data: exchanged, error } = await db.auth.exchangeCodeForSession(code);
   if (error) {
-    throw redirect(`/login?error=${encodeURIComponent("That link has expired. Try another.")}`);
+    // Report what actually failed. Calling everything "expired" sent me
+    // hunting for a stale link when the real fault was a dropped cookie.
+    const detail = /verifier|code challenge/i.test(error.message)
+      ? "The sign-in couldn't be completed in this browser — start again, and finish in the " +
+        "same browser you started from."
+      : error.message;
+    throw redirect(`/login?error=${encodeURIComponent(detail)}`);
+  }
+
+  // Google has vouched for who they are; whether we accept them is ours to
+  // decide. Checked here so the refusal can be explained at the moment it
+  // happens — requireUser() enforces the same rule on every later request.
+  const email = exchanged.user?.email ?? "";
+  if (!isAllowed(email)) {
+    await db.auth.signOut().catch(() => {});
+    throw redirect(
+      `/login?error=${encodeURIComponent(
+        `${email || "That account"} isn't on the allowlist for this deployment.`,
+      )}`,
+    );
   }
 
   // Only ever redirect somewhere inside this app: `next` arrives from a URL and
