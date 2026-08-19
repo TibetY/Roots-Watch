@@ -77,7 +77,7 @@ export async function notifyAll(
       const ntfyFields = config.webhookTopic
         ? {
             topic: config.webhookTopic,
-            title: payload.title ?? "Restock watch",
+            title: payload.title ?? "STDBY",
             ...(payload.url ? { click: payload.url } : {}),
           }
         : {};

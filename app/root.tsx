@@ -26,7 +26,7 @@ export const links: Route.LinksFunction = () => [
 ];
 
 export const meta: Route.MetaFunction = () => [
-  { title: "RESTOCK — stock watch" },
+  { title: "STDBY — stock watch" },
   {
     name: "description",
     content: "Watches shop pages for the sizes you want and tells you the moment one is back.",
@@ -83,7 +83,7 @@ function Header() {
     return (
       <header className="topbar">
         <NavLink to="/login" className="brand" end>
-          RESTOCK<span>.</span>
+          STDBY<span>.</span>
         </NavLink>
       </header>
     );
@@ -92,7 +92,7 @@ function Header() {
   return (
     <header className="topbar">
       <NavLink to="/" className="brand" end>
-        RESTOCK<span>.</span>
+        STDBY<span>.</span>
       </NavLink>
       <nav className="tabs">
         <NavLink to="/" end>

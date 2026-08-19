@@ -1,4 +1,4 @@
--- Restock — schema.
+-- STDBY — schema.
 --
 -- Everything the app used to keep in files under data/ lives here instead,
 -- because Netlify's filesystem is read-only and its functions have no memory

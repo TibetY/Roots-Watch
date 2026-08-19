@@ -30,13 +30,19 @@ import { sweepUser } from "../../app/lib/watcher.server";
 const BUDGET_MS = Number(process.env.SWEEP_BUDGET_MS ?? 8_000);
 
 export default async function sweep(): Promise<Response> {
+  // Logged unconditionally, first thing. The question this function most often
+  // has to answer is not "did it work" but "did it run at all", and a silent
+  // success looks identical to never having been invoked.
+  console.log(`[sweep] fired at ${new Date().toISOString()}`);
+
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) {
-    return Response.json(
-      { ok: false, error: "SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set" },
-      { status: 500 },
-    );
+    const missing = [!url && "SUPABASE_URL", !key && "SUPABASE_SERVICE_ROLE_KEY"]
+      .filter(Boolean)
+      .join(" and ");
+    console.error(`[sweep] not configured: ${missing} missing from the environment`);
+    return Response.json({ ok: false, error: `${missing} must be set` }, { status: 500 });
   }
 
   const db = createClient(url, key, {
@@ -64,7 +70,13 @@ export default async function sweep(): Promise<Response> {
     // Every query sweepUser makes filters on this user_id explicitly. It has
     // to: the service-role client sees every row, so row level security is not
     // doing that filtering here the way it does for a signed-in session.
-    report.push({ userId, ...(await sweepUser(db, userId, { budgetMs: share })) });
+    const outcome = await sweepUser(db, userId, { budgetMs: share });
+    console.log(
+      `[sweep] ${userId}: checked ${outcome.checked}, skipped ${outcome.skipped} ` +
+        `(not due yet), ${outcome.remaining} left for next run, ${outcome.alerts} alerts` +
+        (outcome.errors.length ? ` — errors: ${outcome.errors.join("; ")}` : ""),
+    );
+    report.push({ userId, ...outcome });
   }
 
   // Retention is a once-a-day job riding on the same cron, not a once-every-

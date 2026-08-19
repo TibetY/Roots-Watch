@@ -1,5 +1,5 @@
 {
-  "name": "roots-stock-watch",
+  "name": "stdby",
   "version": "2.0.0",
   "private": true,
   "description": "Watches shop product pages for specific sizes and pushes an alert with a buy link the moment one is back in stock",

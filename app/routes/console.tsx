@@ -26,7 +26,7 @@ export async function action({ request }: Route.ActionArgs) {
 }
 
 const GREETING: ConsoleLine[] = [
-  { text: "restock console — driving the real watcher", kind: "dim" },
+  { text: "stdby console — driving the real watcher", kind: "dim" },
   { text: "`help` for commands. `check` really fetches, and really alerts.", kind: "dim" },
   { text: "", kind: "dim" },
 ];
@@ -55,7 +55,7 @@ export default function ConsoleScreen({ loaderData }: Route.ComponentProps) {
     }
     setLines((prev) => [
       ...prev,
-      { text: `restock ❯ ${ran}`, kind: "cmd" },
+      { text: `stdby ❯ ${ran}`, kind: "cmd" },
       ...result,
       { text: "", kind: "dim" },
     ]);
@@ -131,7 +131,7 @@ export default function ConsoleScreen({ loaderData }: Route.ComponentProps) {
           ))}
           {busy ? <div className="console-line dim">…</div> : null}
           <div className="console-prompt">
-            <span className="caret">restock ❯</span>
+            <span className="caret">stdby ❯</span>
             <input
               ref={inputRef}
               value={command}

@@ -3,7 +3,7 @@ import { data, Form, redirect, useSearchParams } from "react-router";
 import type { Route } from "./+types/login";
 import { allowlistConfigured, getSession, sessionClient, siteOrigin } from "~/lib/supabase.server";
 
-export const meta: Route.MetaFunction = () => [{ title: "Sign in — RESTOCK" }];
+export const meta: Route.MetaFunction = () => [{ title: "Sign in — STDBY" }];
 
 export async function loader({ request }: Route.LoaderArgs) {
   const session = await getSession(request);
@@ -86,7 +86,7 @@ export default function Login({ actionData, loaderData }: Route.ComponentProps) 
           className="kicker"
           style={{ color: "var(--color-accent-700)", marginBottom: 12, letterSpacing: ".12em" }}
         >
-          Restock
+          STDBY
         </div>
         <h2>Sign in</h2>
         <p className="sub" style={{ maxWidth: "54ch" }}>

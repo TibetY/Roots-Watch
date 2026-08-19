@@ -344,8 +344,8 @@ export async function runConsoleCommand(
     }
     const [result] = await notifyAll(
       notifyConfigFrom(settings),
-      "Test notification from the restock console.",
-      { title: "Restock — test" },
+      "Test notification from the stdby console.",
+      { title: "STDBY — test" },
     );
     out.push(
       result?.ok

@@ -54,8 +54,8 @@ export async function action({ request }: Route.ActionArgs) {
       }
       const [result] = await notifyAll(
         candidate,
-        "Test notification from your restock watcher. If this arrived, alerts are wired up.",
-        { title: "Restock — test" },
+        "Test notification from STDBY. If this arrived, alerts are wired up.",
+        { title: "STDBY — test" },
       );
       return result?.ok
         ? { ok: true, message: "Sent — check your phone." }
@@ -98,7 +98,7 @@ function BrowserAlerts() {
     setSupported(ok);
     if (ok) {
       setPermission(Notification.permission);
-      setOn(localStorage.getItem("restockBrowserAlerts") === "on" && Notification.permission === "granted");
+      setOn(localStorage.getItem("stdbyBrowserAlerts") === "on" && Notification.permission === "granted");
     }
   }, []);
 
@@ -111,10 +111,10 @@ function BrowserAlerts() {
           : await Notification.requestPermission();
       setPermission(granted);
       if (granted !== "granted") return;
-      localStorage.setItem("restockBrowserAlerts", "on");
+      localStorage.setItem("stdbyBrowserAlerts", "on");
       setOn(true);
     } else {
-      localStorage.setItem("restockBrowserAlerts", "off");
+      localStorage.setItem("stdbyBrowserAlerts", "off");
       setOn(false);
     }
   }

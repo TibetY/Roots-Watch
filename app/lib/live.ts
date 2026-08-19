@@ -36,7 +36,7 @@ export function useLiveUpdates(env: PublicEnv | null, table = "item_status"): vo
     const db = browserDb(env);
 
     const channel = db
-      .channel(`restock:${table}`)
+      .channel(`stdby:${table}`)
       .on("postgres_changes", { event: "*", schema: "public", table }, () => {
         // `state` is checked so a burst of row updates during a sweep coalesces
         // into one reload rather than queueing a dozen.

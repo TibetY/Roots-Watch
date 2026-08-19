@@ -198,7 +198,16 @@ async function claim(
     );
     return;
   }
-  await db.from("item_status").update({ checking: true }).eq("item_id", itemId);
+  // checked_at moves now, at the *start* of the check, not only when one
+  // finishes. isChecking() measures the claim's age against this column, so
+  // leaving it at the last completed check made every claim look stale the
+  // moment the item was more than a minute overdue — which is exactly when a
+  // sweep picks it up. A "Check now" click landing alongside a sweep would
+  // then see checking=true, judge it expired, and fetch the page a second
+  // time: two requests to the shop and two pushes to your phone for one
+  // restock. It also means a check that dies mid-flight waits out the normal
+  // interval instead of being retried immediately by the next sweep.
+  await db.from("item_status").update({ checking: true, checked_at: now }).eq("item_id", itemId);
 }
 
 /** True when another process claimed this item recently enough to still be working. */
