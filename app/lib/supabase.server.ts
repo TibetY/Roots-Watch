@@ -96,6 +96,30 @@ export function isAllowed(email: string | null | undefined): boolean {
   return list.includes(String(email ?? "").trim().toLowerCase());
 }
 
+/**
+ * The public origin of this deployment.
+ *
+ * `new URL(request.url).origin` is not reliable here. Behind Netlify's proxy
+ * the request the function sees can carry an internal host, or http where the
+ * public address is https. Either one produces a redirect_to that doesn't match
+ * Supabase's allowlist — and Supabase answers a mismatch by silently falling
+ * back to the project's Site URL rather than erroring, which is how a
+ * production sign-in ends up on localhost with nothing in any log.
+ *
+ * Netlify sets URL to the site's primary address. SITE_URL overrides it for
+ * anywhere that doesn't.
+ */
+export function siteOrigin(request: Request): string {
+  const configured = process.env.SITE_URL || process.env.URL;
+  if (configured) return configured.replace(/\/+$/, "");
+
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim();
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  if (forwardedProto && forwardedHost) return `${forwardedProto}://${forwardedHost}`;
+
+  return new URL(request.url).origin;
+}
+
 export type Session = { db: Db; userId: string; email: string; headers: Headers };
 
 /**
@@ -127,6 +151,16 @@ export async function requireUser(request: Request): Promise<Session> {
   const session = await getSession(request);
   if (!session) {
     const url = new URL(request.url);
+
+    // An OAuth code can arrive on a route that isn't the callback. Supabase
+    // answers a redirect_to that isn't on its allowlist by quietly falling
+    // back to the project's Site URL rather than erroring, so the code lands
+    // on "/" and this function would otherwise bounce it to a login screen —
+    // throwing away a perfectly good, single-use credential and leaving
+    // someone in a loop that never explains itself. Forward it instead.
+    const code = url.searchParams.get("code");
+    if (code) throw redirect(`/auth/callback?code=${encodeURIComponent(code)}`);
+
     const next = url.pathname + url.search;
     throw redirect(`/login?next=${encodeURIComponent(next)}`);
   }

@@ -1,7 +1,14 @@
 [build]
   command = "npm run build"
-  # The React Router Netlify plugin emits the server handler and the static
-  # assets; it decides the publish directory, so nothing is hard-coded here.
+  # Where the client bundle lands. This is not optional and not inferred:
+  # without it Netlify publishes the repository root, every /assets/* request
+  # misses, and the SSR catch-all answers each one with the app's HTML — which
+  # surfaces as a page that 404s all its own scripts and refuses its stylesheet
+  # for having a text/html MIME type.
+  #
+  # The server half is emitted separately by @netlify/vite-plugin-react-router,
+  # into .netlify/v1/functions/, which Netlify picks up on its own.
+  publish = "build/client"
 
 [build.environment]
   NODE_VERSION = "22"

@@ -15,3 +15,7 @@ node_modules/
 .claude/settings.local.json
 
 .DS_Store
+
+# Emitted by @netlify/vite-plugin-react-router at build time — the SSR
+# function Netlify picks up. Rebuilt every deploy; never committed.
+/.netlify/

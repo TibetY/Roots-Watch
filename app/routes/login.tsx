@@ -1,7 +1,7 @@
 import { data, Form, redirect, useSearchParams } from "react-router";
 
 import type { Route } from "./+types/login";
-import { allowlistConfigured, getSession, sessionClient } from "~/lib/supabase.server";
+import { allowlistConfigured, getSession, sessionClient, siteOrigin } from "~/lib/supabase.server";
 
 export const meta: Route.MetaFunction = () => [{ title: "Sign in — RESTOCK" }];
 
@@ -21,13 +21,15 @@ export async function loader({ request }: Route.LoaderArgs) {
  */
 export async function action({ request }: Route.ActionArgs) {
   const { db, headers } = sessionClient(request);
-  const url = new URL(request.url);
   const next = String((await request.formData()).get("next") ?? "/");
 
   const { data: result, error } = await db.auth.signInWithOAuth({
     provider: "google",
     options: {
-      redirectTo: `${url.origin}/auth/callback?next=${encodeURIComponent(next)}`,
+      // Must match an entry in Supabase's Redirect URLs exactly, scheme
+      // included — see siteOrigin() for why the request's own URL isn't
+      // trustworthy for this.
+      redirectTo: `${siteOrigin(request)}/auth/callback?next=${encodeURIComponent(next)}`,
     },
   });
 
