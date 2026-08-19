@@ -14,7 +14,7 @@
 // Everything the browser is allowed to know goes through publicEnv().
 
 import { createServerClient, parseCookieHeader, serializeCookieHeader } from "@supabase/ssr";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { redirect } from "react-router";
 
 export type Db = SupabaseClient;
@@ -133,13 +133,11 @@ export async function requireUser(request: Request): Promise<Session> {
   return session;
 }
 
-/**
- * Full-access client for the scheduled sweep. Bypasses row level security.
- *
- * Called only from the Netlify function, never from a route.
- */
-export function serviceClient(): Db {
-  return createClient(required("SUPABASE_URL"), required("SUPABASE_SERVICE_ROLE_KEY"), {
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-}
+// There is deliberately no service-role client in here.
+//
+// The scheduled sweep builds its own, in netlify/functions/sweep.mts, from the
+// environment it runs in. Exporting one from a module that routes import would
+// put an RLS-bypassing client one autocomplete away from a loader — and a
+// route that reached for it would read every user's rows while looking
+// entirely ordinary. The only code that needs it is the code that has no user
+// to act as.

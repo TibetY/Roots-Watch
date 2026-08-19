@@ -17,12 +17,17 @@ import { sweepUser } from "../../app/lib/watcher.server";
 /**
  * How long to spend checking before handing the rest to the next run.
  *
- * Netlify stops a scheduled function well before this matters for a short
- * watchlist; the budget is here so a long one degrades into "checked the
- * stalest few, will get the rest in five minutes" instead of being killed
- * halfway through writing a result.
+ * Deliberately well under any plausible platform timeout rather than tuned to
+ * a specific one — Netlify's execution limit differs by plan and has changed
+ * more than once, and a budget that quietly exceeds it means the function is
+ * killed rather than finishing tidily. Eight seconds checks a handful of items
+ * per tick, and with a five-minute heartbeat that is far more throughput than
+ * a ten-minute cadence needs.
+ *
+ * Raise it with SWEEP_BUDGET_MS if a long watchlist starts trailing; `remaining`
+ * in the response says whether it is.
  */
-const BUDGET_MS = 20_000;
+const BUDGET_MS = Number(process.env.SWEEP_BUDGET_MS ?? 8_000);
 
 export default async function sweep(): Promise<Response> {
   const url = process.env.SUPABASE_URL;
@@ -62,11 +67,19 @@ export default async function sweep(): Promise<Response> {
     report.push({ userId, ...(await sweepUser(db, userId, { budgetMs: share })) });
   }
 
-  await pruneHistory(db).catch((pruneError) => {
-    console.error("[sweep] prune failed:", pruneError);
-  });
+  // Retention is a once-a-day job riding on the same cron, not a once-every-
+  // five-minutes one: it is a delete across the whole history table, and there
+  // is nothing to gain from re-running it 288 times a day to remove the same
+  // nothing. Scheduled functions run on UTC, so this fires on one tick.
+  const now = new Date();
+  const pruneWindow = now.getUTCHours() === 4 && now.getUTCMinutes() < 5;
+  if (pruneWindow) {
+    await pruneHistory(db).catch((pruneError) => {
+      console.error("[sweep] prune failed:", pruneError);
+    });
+  }
 
-  return Response.json({ ok: true, ms: Date.now() - startedAt, users: report });
+  return Response.json({ ok: true, ms: Date.now() - startedAt, pruned: pruneWindow, users: report });
 }
 
 export const config: Config = {
