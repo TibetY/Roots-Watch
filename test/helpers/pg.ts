@@ -14,7 +14,10 @@ import { resolve } from "node:path";
 
 import { PGlite } from "@electric-sql/pglite";
 
-const MIGRATION = resolve(process.cwd(), "supabase/migrations/0001_init.sql");
+// Applied in order, the way Supabase applies them.
+const MIGRATIONS = ["0001_init.sql", "0002_outcomes.sql"].map((name) =>
+  resolve(process.cwd(), "supabase/migrations", name),
+);
 
 /** Stand-ins for the parts of Supabase the migration leans on. */
 const BOOTSTRAP = `
@@ -51,7 +54,9 @@ export type TestDb = {
 export async function freshDatabase(): Promise<TestDb> {
   const pg = new PGlite();
   await pg.exec(BOOTSTRAP);
-  await pg.exec(readFileSync(MIGRATION, "utf8"));
+  for (const migration of MIGRATIONS) {
+    await pg.exec(readFileSync(migration, "utf8"));
+  }
 
   return {
     pg,

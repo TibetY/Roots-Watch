@@ -4,6 +4,8 @@ import { data, Form, Link } from "react-router";
 import type { Route } from "./+types/history";
 import { readHistory } from "~/lib/history.server";
 import { loadWatchlist } from "~/lib/items.server";
+import { creditLine } from "~/lib/outcomes";
+import { readTally } from "~/lib/outcomes.server";
 import { readSettings } from "~/lib/settings.server";
 import { requireUser } from "~/lib/supabase.server";
 import { loadStatuses } from "~/lib/watcher.server";
@@ -33,9 +35,10 @@ export async function loader({ request }: Route.LoaderArgs) {
   // shopper's zone instead, or an evening restock lands on tomorrow.
   const calendar = zonedCalendar(settings.timezone);
 
-  const [watchlist, statuses] = await Promise.all([
+  const [watchlist, statuses, tally] = await Promise.all([
     loadWatchlist(db, userId),
     loadStatuses(db, userId),
+    readTally(db, userId),
   ]);
 
   const items = await Promise.all(
@@ -56,7 +59,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   );
 
   return data(
-    { days, items, intervalMinutes: settings.intervalMinutes, timezone: settings.timezone },
+    {
+      days,
+      items,
+      tally,
+      credit: creditLine(tally),
+      intervalMinutes: settings.intervalMinutes,
+      timezone: settings.timezone,
+    },
     { headers },
   );
 }
@@ -265,7 +275,7 @@ function ItemHistory({
 }
 
 export default function History({ loaderData }: Route.ComponentProps) {
-  const { days, items, intervalMinutes, timezone } = loaderData;
+  const { days, items, tally, credit, intervalMinutes, timezone } = loaderData;
   // Built from the stored zone rather than the browser's, so the server render
   // and the hydrated one agree — and so the dates match the ones the loader
   // already bucketed by.
@@ -296,6 +306,17 @@ export default function History({ loaderData }: Route.ComponentProps) {
           ))}
         </Form>
       </div>
+
+      {credit ? (
+        <div className="credit">
+          <span className="val">{tally.foundHere}</span>
+          <p>
+            {credit} Counted from what you told us when you stopped each watch, so it is your
+            word rather than ours &mdash; which is also why the ones you found first are shown
+            next to it, and not quietly left out.
+          </p>
+        </div>
+      ) : null}
 
       {items.length ? (
         items.map((item) => (

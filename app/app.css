@@ -517,6 +517,40 @@ a {
   display: contents;
 }
 
+/* — the one question worth asking, asked once, when a watch ends — */
+.row-why {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 2px solid var(--color-text);
+}
+.row-why p {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.015em;
+  margin: 6px 0 0;
+}
+.row-why-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+/* Each option is its own form; without this the buttons would sit in a
+   column of anonymous form boxes rather than in one row. */
+.row-why form {
+  display: contents;
+}
+.row-why .btn-secondary {
+  background: var(--color-bg);
+}
+
 /* — stats — */
 .stats {
   display: grid;
@@ -1188,4 +1222,29 @@ a {
     padding: 20px 0;
     gap: 16px;
   }
+}
+
+/* — outcomes, on the History screen — */
+.credit {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 20px 0 26px;
+  border-bottom: 2px solid var(--color-divider);
+  margin-bottom: 8px;
+}
+.credit .val {
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 40px;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--color-accent);
+}
+.credit p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--color-neutral-700);
+  max-width: 52ch;
 }

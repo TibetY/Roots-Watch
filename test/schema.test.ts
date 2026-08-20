@@ -39,6 +39,7 @@ describe("migration", () => {
       "events",
       "item_status",
       "items",
+      "outcomes",
       "settings",
     ]);
   });
@@ -49,7 +50,7 @@ describe("migration", () => {
        where relnamespace = 'public'::regnamespace and relkind = 'r' order by relname`,
     );
     expect(result.rows.every((row) => row.relrowsecurity)).toBe(true);
-    expect(result.rows).toHaveLength(7);
+    expect(result.rows).toHaveLength(8);
   });
 
   it("refuses a url that isn't http(s)", async () => {
@@ -215,5 +216,52 @@ describe("prune_history", () => {
     const events = await db.pg.query(`select at from public.events where item_id = $1`, [item]);
     expect(checks.rows).toHaveLength(1);
     expect(events.rows).toHaveLength(1);
+  });
+});
+
+describe("outcomes", () => {
+  it("survives the item it describes being deleted", async () => {
+    const item = await itemFor(alice, "https://shop.example/outcome.html");
+    await db.pg.query(
+      `insert into public.outcomes (user_id, item_id, label, url, reason)
+       values ($1, $2, $3, $4, 'found_here')`,
+      [alice, item, "A Coat", "https://shop.example/outcome.html"],
+    );
+
+    await db.pg.query(`delete from public.items where id = $1`, [item]);
+
+    // The whole point of the ON DELETE SET NULL: tidying the watchlist must not
+    // quietly decrement the one number the History screen reports.
+    const kept = await db.pg.query<{ item_id: string | null; label: string; reason: string }>(
+      `select item_id, label, reason from public.outcomes where user_id = $1`,
+      [alice],
+    );
+    expect(kept.rows).toHaveLength(1);
+    expect(kept.rows[0].item_id).toBeNull();
+    expect(kept.rows[0].label).toBe("A Coat");
+    expect(kept.rows[0].reason).toBe("found_here");
+  });
+
+  it("only accepts the three reasons the UI offers", async () => {
+    const item = await itemFor(alice, "https://shop.example/reason.html");
+    await expect(
+      db.pg.query(
+        `insert into public.outcomes (user_id, item_id, reason) values ($1, $2, 'dunno')`,
+        [alice, item],
+      ),
+    ).rejects.toThrow(/outcomes_reason_check/);
+  });
+
+  it("keeps one user's outcomes out of another's tally", async () => {
+    await db.pg.exec(`grant usage on schema public to authenticated;
+                      grant all on all tables in schema public to authenticated;
+                      grant usage on all sequences in schema public to authenticated;
+                      set role authenticated;`);
+
+    await db.asUser(bob);
+    const seen = await db.pg.query(`select id from public.outcomes`);
+    expect(seen.rows).toHaveLength(0);
+
+    await db.pg.exec(`reset role;`);
   });
 });

@@ -45,6 +45,22 @@ export default async function sweep(): Promise<Response> {
     return Response.json({ ok: false, error: `${missing} must be set` }, { status: 500 });
   }
 
+  // Supabase's dashboard lists the JWT *signing secret* under a heading close
+  // enough to the API keys that the two get swapped. Pasting the signing
+  // secret here fails every query with an unhelpful 401 from PostgREST — the
+  // sweep looks like it ran and found nothing. A shape check turns that into a
+  // sentence. Warn rather than refuse: the format is Supabase's to change, and
+  // a wrong guess here should not ground a working deployment.
+  const looksLikeKey = key.startsWith("eyJ") || key.startsWith("sb_secret_");
+  if (!looksLikeKey) {
+    console.error(
+      "[sweep] SUPABASE_SERVICE_ROLE_KEY doesn't look like an API key. Expected a JWT " +
+        "starting 'eyJ' or a key starting 'sb_secret_'. The value under Settings → JWT Keys → " +
+        "Legacy JWT Secret is the token *signing* secret, not an API key — the one you want is " +
+        "under Settings → API Keys, labelled service_role.",
+    );
+  }
+
   const db = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
@@ -56,7 +72,13 @@ export default async function sweep(): Promise<Response> {
     .eq("enabled", true)
     .returns<{ user_id: string }[]>();
   if (error) {
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+    // The first query is also the credential test, so say so here rather than
+    // letting an auth failure read as a database problem.
+    const hint = /jwt|api key|unauthor|invalid/i.test(error.message)
+      ? " — this usually means SUPABASE_SERVICE_ROLE_KEY is wrong; check Settings → API Keys"
+      : "";
+    console.error(`[sweep] couldn't read the watchlist: ${error.message}${hint}`);
+    return Response.json({ ok: false, error: error.message + hint }, { status: 500 });
   }
 
   const userIds = [...new Set((owners ?? []).map((row) => row.user_id))];

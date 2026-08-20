@@ -3,6 +3,8 @@ import { data, Form, Link } from "react-router";
 
 import type { Route } from "./+types/watching";
 import { loadWatchlist, removeItem, updateItem } from "~/lib/items.server";
+import { isReason, REASONS } from "~/lib/outcomes";
+import { readTally, recordOutcome } from "~/lib/outcomes.server";
 import { readSettings } from "~/lib/settings.server";
 import { publicEnv, requireUser } from "~/lib/supabase.server";
 import { useLiveUpdates } from "~/lib/live";
@@ -28,10 +30,11 @@ import {
 
 export async function loader({ request }: Route.LoaderArgs) {
   const { db, userId, headers } = await requireUser(request);
-  const [items, statuses, settings] = await Promise.all([
+  const [items, statuses, settings, tally] = await Promise.all([
     loadWatchlist(db, userId),
     loadStatuses(db, userId),
     readSettings(db, userId),
+    readTally(db, userId),
   ]);
 
   return data(
@@ -47,6 +50,7 @@ export async function loader({ request }: Route.LoaderArgs) {
       watcher: await watcherStats(db, userId, settings),
       // Only the flag, never the topic — see the note in root.tsx.
       alerts: { hasChannel: settings.hasChannel, destination: alertDestination(settings) },
+      tally,
       env: publicEnv(),
     },
     { headers },
@@ -64,8 +68,28 @@ export async function action({ request }: Route.ActionArgs) {
       await updateItem(db, id, { enabled: intent === "resume" });
       return data({ ok: true }, { headers });
     }
+    // Stopping a watch on something you found is the one moment worth asking
+    // why: you know the answer, and you are about to stop thinking about this
+    // item for good. Ask later and it is guesswork; ask earlier and it is noise.
+    if (intent === "stop") {
+      const reason = form.get("reason");
+      if (!isReason(reason)) {
+        return data({ ok: false, error: "Pick one of the reasons." }, { headers });
+      }
+      const items = await loadWatchlist(db, userId);
+      const item = items.find((entry) => entry.id === id);
+      if (item) {
+        // Recorded before the item is touched. If the pause failed afterwards
+        // you would still have answered honestly, and a watch that is still
+        // running is a smaller problem than a tally with a hole in it.
+        await recordOutcome(db, userId, item, reason);
+        await updateItem(db, id, { enabled: false });
+      }
+      return data({ ok: true }, { headers });
+    }
     if (intent === "remove") {
       // Status, alert state, checks and events go with it, by cascade.
+      // Outcomes do not: see supabase/migrations/0002_outcomes.sql.
       await removeItem(db, id);
       return data({ ok: true }, { headers });
     }
@@ -118,6 +142,7 @@ function SizeTags({ item }: { item: ItemView }) {
 }
 
 function ItemRow({ item, intervalMinutes }: { item: ItemView; intervalMinutes: number }) {
+  const [asking, setAsking] = useState(false);
   const state = stateOf(item);
   const status = item.status;
   const sub = [money(status), hostOf(item.url)].filter(Boolean).join(" · ");
@@ -194,12 +219,13 @@ function ItemRow({ item, intervalMinutes }: { item: ItemView; intervalMinutes: n
             >
               Buy it ↗
             </a>
-            <Form method="post">
-              <input type="hidden" name="id" value={item.id} />
-              <button className="btn btn-secondary" name="intent" value="pause">
-                Stop watching
-              </button>
-            </Form>
+            <button
+              className="btn btn-secondary"
+              type="button"
+              onClick={() => setAsking(true)}
+            >
+              Stop watching
+            </button>
           </>
         ) : state === "paused" ? (
           <>
@@ -255,6 +281,34 @@ function ItemRow({ item, intervalMinutes }: { item: ItemView; intervalMinutes: n
           </Form>
         </div>
       </div>
+
+      {asking ? (
+        <div className="row-why">
+          <div>
+            <span className="kicker">Before you go</span>
+            <p>Did we actually help?</p>
+          </div>
+          <div className="row-why-options">
+            {REASONS.map((reason) => (
+              <Form method="post" key={reason.value}>
+                <input type="hidden" name="id" value={item.id} />
+                <input type="hidden" name="reason" value={reason.value} />
+                <button
+                  className="btn btn-secondary"
+                  name="intent"
+                  value="stop"
+                  title={reason.hint}
+                >
+                  {reason.label}
+                </button>
+              </Form>
+            ))}
+            <button className="btn btn-ghost" type="button" onClick={() => setAsking(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -300,7 +354,7 @@ function Banner({ item, onDismiss }: { item: ItemView; onDismiss: () => void }) 
 }
 
 export default function Watching({ loaderData }: Route.ComponentProps) {
-  const { items, watcher, alerts, env } = loaderData;
+  const { items, watcher, alerts, tally, env } = loaderData;
   useLiveUpdates(env);
 
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -353,7 +407,11 @@ export default function Watching({ loaderData }: Route.ComponentProps) {
           </div>
         )}
 
-        <div className="stats">
+        <div className="stats four">
+          <div>
+            <span className="kicker">Found because of us</span>
+            <div className="val">{tally.foundHere.toLocaleString()}</div>
+          </div>
           <div>
             {/* "This session" meant something when a process stayed up. There
                 are no sessions now, so the honest window is a day. */}
